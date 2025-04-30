@@ -5,11 +5,14 @@
 
 pub use crate::common::sdcard::proto;
 
-use super::super::{bisync, DelayNs, SpiDevice};
+use super::super::{bisync, DelayNs};
 
 use super::blockdevice::{Block, BlockCount, BlockDevice, BlockIdx};
 use core::cell::RefCell;
+use device::SdCardSpiDevice;
 use proto::*;
+
+pub mod device;
 
 // ****************************************************************************
 // Imports
@@ -42,7 +45,7 @@ const COMMAND_RESPONSE_BYTES: usize = 5;
 /// [`SpiDevice`]: embedded_hal::spi::SpiDevice
 pub struct SdCard<SPI, DELAYER>
 where
-    SPI: SpiDevice<u8>,
+    SPI: SdCardSpiDevice,
     DELAYER: DelayNs,
 {
     inner: RefCell<SdCardInner<SPI, DELAYER>>,
@@ -51,7 +54,7 @@ where
 #[bisync]
 impl<SPI, DELAYER> SdCard<SPI, DELAYER>
 where
-    SPI: SpiDevice<u8>,
+    SPI: SdCardSpiDevice,
     DELAYER: DelayNs,
 {
     /// Create a new SD/MMC Card driver using a raw SPI interface.
@@ -136,6 +139,18 @@ where
         inner.card_type
     }
 
+    /// Initialize the SD card.
+    ///
+    /// This must be called before performing any operations on the card, with
+    /// SPI frequency of 100 to 400 KHz. After this method returns
+    /// successfully, the SPI frequency can be increased to the maximum
+    /// supported by the card.
+    pub async fn init_card(&self) -> Result<(), Error> {
+        let mut inner = self.inner.borrow_mut();
+        inner.init().await?;
+        Ok(())
+    }
+
     /// Tell the driver the card has been initialised.
     ///
     /// This is here in case you were previously using the SD Card, and then a
@@ -161,7 +176,7 @@ where
 #[bisync]
 impl<SPI, DELAYER> BlockDevice for SdCard<SPI, DELAYER>
 where
-    SPI: SpiDevice<u8>,
+    SPI: SdCardSpiDevice,
     DELAYER: DelayNs,
 {
     type Error = Error;
@@ -205,7 +220,7 @@ where
 /// All the APIs required `&mut self`.
 struct SdCardInner<SPI, DELAYER>
 where
-    SPI: SpiDevice<u8>,
+    SPI: SdCardSpiDevice,
     DELAYER: DelayNs,
 {
     spi: SPI,
@@ -217,7 +232,7 @@ where
 #[bisync]
 impl<SPI, DELAYER> SdCardInner<SPI, DELAYER>
 where
-    SPI: SpiDevice<u8>,
+    SPI: SdCardSpiDevice,
     DELAYER: DelayNs,
 {
     /// Read one or more blocks, starting at the given block index.
@@ -591,6 +606,14 @@ where
                 .delay(&mut self.delayer, Error::TimeoutWaitNotBusy)
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn init(&mut self) -> Result<(), Error> {
+        self.spi
+            .send_clock_pulses()
+            .await
+            .map_err(|_e| Error::Transport)?;
         Ok(())
     }
 }
